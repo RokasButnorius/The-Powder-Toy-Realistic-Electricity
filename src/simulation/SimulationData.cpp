@@ -77,6 +77,7 @@ static std::vector<menu_section> LoadMenus()
 {
 	return
 	std::vector<menu_section>{
+		{0xE050, String("NWMD"), 0, 1},                    // ← New tab at the top
 		{0xE041, String("Walls"), 0, 1},
 		{0xE042, String("Electronics"), 0, 1},
 		{0xE056, String("Powered Materials"), 0, 1},
