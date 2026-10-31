@@ -23,14 +23,14 @@ void Element::Element_CSWR()
 
 	Flammable = 0;
 	Explosive = 0;
-	Meltable = 1;          // can melt when overloaded
+	Meltable = 1;
 	Hardness = 1;
 
 	Weight = 100;
 	HeatConduct = 250;
-	Description = "Custom Wire. Uses deco colour as wire ID. Set amp rating with PROP.";
+	Description = "Wire. tmp=amp rating (PROP). Realistic V=IR. Overloads heat and melt.";
 
-	Properties = TYPE_SOLID | PROP_CONDUCTS | PROP_LIFE_DEC;
+	Properties = TYPE_SOLID;
 
 	LowPressure = IPL;
 	LowPressureTransition = NT;
@@ -38,32 +38,153 @@ void Element::Element_CSWR()
 	HighPressureTransition = NT;
 	LowTemperature = ITL;
 	LowTemperatureTransition = NT;
-	HighTemperature = 1673.0f;          // melts around here when overloaded
+	HighTemperature = 1673.0f;
 	HighTemperatureTransition = PT_LAVA;
 
 	Update = &update;
 }
 
+static float source_voltage(int type)
+{
+	switch (type) {
+		case PT_CBAT:  return 12.0f;
+		case PT_PBAT:  return 3.7f;
+		case PT_ABAT:  return 1.5f;
+		case PT_AABAT: return 1.5f;
+		case PT_MAINS: return 240.0f;
+		case PT_USPWR: return 120.0f;
+	}
+	return 0.0f;
+}
+
 static int update(UPDATE_FUNC_ARGS)
 {
-	// Temporary simple behaviour
-	// tmp  = max amp rating (default 5A for now)
-	// tmp2 = current flowing through it
-	// life = heat buildup / overload timer
+	// tmp     = amp rating
+	// tmp2    = current (amps * 100)
+	// tmp3    = powered flag
+	// tmp4    = overload counter
+	// life    = voltage at this wire
+	// pavg[0] = grace counter (ticks with V>0 but no load seen)
 
 	if (parts[i].tmp <= 0)
-		parts[i].tmp = 5;   // default 5 amp rating
+		parts[i].tmp = 5;
 
-	// Very basic heating if current > rating (will improve later)
-	if (parts[i].tmp2 > parts[i].tmp)
+	float rating = (float)parts[i].tmp;
+	float R_wire = 100.0f / rating;
+
+	float V = 0.0f;
+	float neighbor_I = 0.0f;
+	float local_load_I = 0.0f;
+
+	// Pass 1: find voltage (sources + adjacent wires)
+	for (int rx = -1; rx <= 1; rx++)
+	for (int ry = -1; ry <= 1; ry++)
 	{
-		parts[i].temp += (parts[i].tmp2 - parts[i].tmp) * 0.8f;
-		parts[i].life++;
+		if (!rx && !ry) continue;
+		int nx = x + rx, ny = y + ry;
+		if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES) continue;
+
+		int r = pmap[ny][nx];
+		if (!r) continue;
+		int rt = TYP(r);
+		int ri = ID(r);
+
+		float src_V = source_voltage(rt);
+		if (src_V > 0.0f && parts[ri].life > 0 && src_V > V)
+			V = src_V;
+
+		if (rt == PT_CSWR && (float)parts[ri].life > V)
+			V = (float)parts[ri].life;
 	}
-	else if (parts[i].life > 0)
+
+	// Pass 2: local load current + inherited current
+	for (int rx = -1; rx <= 1; rx++)
+	for (int ry = -1; ry <= 1; ry++)
 	{
-		parts[i].life--;
+		if (!rx && !ry) continue;
+		int nx = x + rx, ny = y + ry;
+		if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES) continue;
+
+		int r = pmap[ny][nx];
+		if (!r) continue;
+		int rt = TYP(r);
+		int ri = ID(r);
+
+		if (rt == PT_LIGHT && parts[ri].tmp > 0 && V > 0.0f)
+		{
+			float R_load = 240.0f / (float)parts[ri].tmp;
+			local_load_I += V / (2.0f * R_wire + R_load);
+		}
+
+		if (rt == PT_CSWR)
+		{
+			float nI = (float)parts[ri].tmp2 / 100.0f;
+			if (nI > neighbor_I) neighbor_I = nI;
+		}
 	}
+
+	// Current
+	float current = 0.0f;
+	if (local_load_I > 0.0f)
+	{
+		current = local_load_I + neighbor_I;
+		parts[i].pavg[0] = 0.0f;
+	}
+	else if (neighbor_I > 0.0f)
+	{
+		current = neighbor_I;
+		parts[i].pavg[0] = 0.0f;
+	}
+	else if (V > 0.0f)
+	{
+		parts[i].pavg[0] += 1.0f;
+		if (parts[i].pavg[0] > 100.0f)
+			current = V / (2.0f * R_wire);   // confirmed short circuit
+	}
+	else
+	{
+		parts[i].pavg[0] = 0.0f;
+	}
+
+	// Heat from current
+	float heat = current * current / rating * 0.05f;
+	if (current > rating)
+	{
+		heat += (current - rating) * 30.0f;
+		parts[i].tmp4++;
+	}
+	else if (parts[i].tmp4 > 0)
+	{
+		parts[i].tmp4--;
+	}
+	parts[i].temp += heat;
+
+	// Passive cooling toward ambient
+	if (parts[i].temp > 293.15f)
+	{
+		parts[i].temp -= 1.0f;
+		if (parts[i].temp < 293.15f) parts[i].temp = 293.15f;
+	}
+
+	// Keep adjacent lights lit
+	if (V > 0.0f)
+	{
+		for (int rx = -1; rx <= 1; rx++)
+		for (int ry = -1; ry <= 1; ry++)
+		{
+			if (!rx && !ry) continue;
+			int nx = x + rx, ny = y + ry;
+			if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES) continue;
+			int r = pmap[ny][nx];
+			if (r && TYP(r) == PT_LIGHT)
+				parts[ID(r)].life = 2;
+		}
+	}
+
+	// Store state
+	parts[i].tmp2 = (int)(current * 100.0f);
+	parts[i].tmp3 = (V > 0.0f) ? 1 : 0;
+	parts[i].life = (int)V;
 
 	return 0;
 }
