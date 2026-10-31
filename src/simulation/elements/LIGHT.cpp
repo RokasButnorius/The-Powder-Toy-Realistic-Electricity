@@ -48,8 +48,39 @@ void Element::Element_LIGHT()
 
 static int update(UPDATE_FUNC_ARGS)
 {
-	// tmp = current draw (default ~0.5A for now)
+	// tmp = current draw
 	if (parts[i].tmp <= 0)
 		parts[i].tmp = 1;
 
-	// life > 0 
+	// life > 0 means currently powered
+	if (parts[i].life > 0)
+	{
+		parts[i].life--;
+	}
+
+	return 0;
+}
+
+static int graphics(GRAPHICS_FUNC_ARGS)
+{
+	if (cpart->life > 0)
+	{
+		// Lit up
+		*pixel_mode |= PMODE_GLOW;
+		*colr = 255;
+		*colg = 255;
+		*colb = 180;
+		*firea = 80;
+		*firer = 255;
+		*fireg = 255;
+		*fireb = 150;
+	}
+	else
+	{
+		// Off
+		*colr = 80;
+		*colg = 80;
+		*colb = 80;
+	}
+	return 0;
+}
