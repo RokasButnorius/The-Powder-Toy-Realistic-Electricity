@@ -195,6 +195,14 @@ simulation_elem_names = [
 	'RSSS',
 	'BASE',
 	'SEED',
+	'CBAT',
+	'AABAT',
+	'ABAT',
+	'PBAT',
+	'MAINS',
+	'USPWR',
+	'CSWR',
+	'LIGHT',
 ]
 
 simulation_elem_src = []
