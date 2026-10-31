@@ -11,35 +11,21 @@ void Element::Element_CSWR()
 	MenuSection = SC_NWMD;
 	Enabled = 1;
 
-	Advection = 0.0f;
-	AirDrag = 0.00f * CFDS;
-	AirLoss = 0.90f;
-	Loss = 0.00f;
-	Collision = 0.0f;
-	Gravity = 0.0f;
-	Diffusion = 0.00f;
-	HotAir = 0.000f * CFDS;
-	Falldown = 0;
+	Advection = 0.0f; AirDrag = 0.00f * CFDS; AirLoss = 0.90f;
+	Loss = 0.00f; Collision = 0.0f; Gravity = 0.0f; Diffusion = 0.00f;
+	HotAir = 0.000f * CFDS; Falldown = 0;
 
-	Flammable = 0;
-	Explosive = 0;
-	Meltable = 1;
-	Hardness = 1;
+	Flammable = 0; Explosive = 0; Meltable = 1; Hardness = 1;
 
-	Weight = 100;
-	HeatConduct = 250;
-	Description = "Wire. tmp=amp rating (PROP). Realistic V=IR. Overloads heat and melt.";
+	Weight = 100; HeatConduct = 250;
+	Description = "Wire. PROP tmp=amp rating. Overload heats and melts.";
 
 	Properties = TYPE_SOLID;
 
-	LowPressure = IPL;
-	LowPressureTransition = NT;
-	HighPressure = IPH;
-	HighPressureTransition = NT;
-	LowTemperature = ITL;
-	LowTemperatureTransition = NT;
-	HighTemperature = 1673.0f;
-	HighTemperatureTransition = PT_LAVA;
+	LowPressure = IPL; LowPressureTransition = NT;
+	HighPressure = IPH; HighPressureTransition = NT;
+	LowTemperature = ITL; LowTemperatureTransition = NT;
+	HighTemperature = 1673.0f; HighTemperatureTransition = PT_LAVA;
 
 	Update = &update;
 }
@@ -59,12 +45,11 @@ static float source_voltage(int type)
 
 static int update(UPDATE_FUNC_ARGS)
 {
-	// tmp     = amp rating
-	// tmp2    = current (amps * 100)
-	// tmp3    = powered flag
-	// tmp4    = overload counter
-	// life    = voltage at this wire
-	// pavg[0] = grace counter (ticks with V>0 but no load seen)
+	// tmp  = amp rating
+	// tmp2 = current (amps * 100)
+	// tmp3 = grace counter (short-circuit detection)
+	// tmp4 = overload counter
+	// life = voltage * 10
 
 	if (parts[i].tmp <= 0)
 		parts[i].tmp = 5;
@@ -76,14 +61,13 @@ static int update(UPDATE_FUNC_ARGS)
 	float neighbor_I = 0.0f;
 	float local_load_I = 0.0f;
 
-	// Pass 1: find voltage (sources + adjacent wires)
+	// Pass 1: find voltage
 	for (int rx = -1; rx <= 1; rx++)
 	for (int ry = -1; ry <= 1; ry++)
 	{
 		if (!rx && !ry) continue;
 		int nx = x + rx, ny = y + ry;
 		if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES) continue;
-
 		int r = pmap[ny][nx];
 		if (!r) continue;
 		int rt = TYP(r);
@@ -93,18 +77,20 @@ static int update(UPDATE_FUNC_ARGS)
 		if (src_V > 0.0f && parts[ri].life > 0 && src_V > V)
 			V = src_V;
 
-		if (rt == PT_CSWR && (float)parts[ri].life > V)
-			V = (float)parts[ri].life;
+		if (rt == PT_CSWR)
+		{
+			float nV = (float)parts[ri].life / 10.0f;
+			if (nV > V) V = nV;
+		}
 	}
 
-	// Pass 2: local load current + inherited current
+	// Pass 2: loads and inherited current
 	for (int rx = -1; rx <= 1; rx++)
 	for (int ry = -1; ry <= 1; ry++)
 	{
 		if (!rx && !ry) continue;
 		int nx = x + rx, ny = y + ry;
 		if (nx < 0 || nx >= XRES || ny < 0 || ny >= YRES) continue;
-
 		int r = pmap[ny][nx];
 		if (!r) continue;
 		int rt = TYP(r);
@@ -123,30 +109,28 @@ static int update(UPDATE_FUNC_ARGS)
 		}
 	}
 
-	// Current
 	float current = 0.0f;
 	if (local_load_I > 0.0f)
 	{
 		current = local_load_I + neighbor_I;
-		parts[i].pavg[0] = 0.0f;
+		parts[i].tmp3 = 0;
 	}
 	else if (neighbor_I > 0.0f)
 	{
 		current = neighbor_I;
-		parts[i].pavg[0] = 0.0f;
+		parts[i].tmp3 = 0;
 	}
 	else if (V > 0.0f)
 	{
-		parts[i].pavg[0] += 1.0f;
-		if (parts[i].pavg[0] > 100.0f)
-			current = V / (2.0f * R_wire);   // confirmed short circuit
+		if (parts[i].tmp3 < 30000) parts[i].tmp3++;
+		if (parts[i].tmp3 > 100)
+			current = V / (2.0f * R_wire);
 	}
 	else
 	{
-		parts[i].pavg[0] = 0.0f;
+		parts[i].tmp3 = 0;
 	}
 
-	// Heat from current
 	float heat = current * current / rating * 0.05f;
 	if (current > rating)
 	{
@@ -159,14 +143,12 @@ static int update(UPDATE_FUNC_ARGS)
 	}
 	parts[i].temp += heat;
 
-	// Passive cooling toward ambient
 	if (parts[i].temp > 293.15f)
 	{
 		parts[i].temp -= 1.0f;
 		if (parts[i].temp < 293.15f) parts[i].temp = 293.15f;
 	}
 
-	// Keep adjacent lights lit
 	if (V > 0.0f)
 	{
 		for (int rx = -1; rx <= 1; rx++)
@@ -181,10 +163,8 @@ static int update(UPDATE_FUNC_ARGS)
 		}
 	}
 
-	// Store state
 	parts[i].tmp2 = (int)(current * 100.0f);
-	parts[i].tmp3 = (V > 0.0f) ? 1 : 0;
-	parts[i].life = (int)V;
+	parts[i].life = (int)(V * 10.0f);
 
 	return 0;
 }
